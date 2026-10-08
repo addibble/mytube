@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(Library.self) private var library
     @Environment(PlayerEngine.self) private var player
+    @Environment(SearchModel.self) private var search
 
     @State private var showingAddBook = false
     @State private var showingPlayer = false
@@ -35,7 +36,8 @@ struct LibraryView: View {
             .navigationDestination(for: UUID.self) { BookDetailView(bookID: $0) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { skipSettingsMenu }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Search YouTube", systemImage: "magnifyingglass") { search.isPresented = true }
                     Button("Add Audiobook", systemImage: "plus") { showingAddBook = true }
                 }
             }
@@ -47,6 +49,14 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showingAddBook) { AddBookView() }
         .sheet(isPresented: $showingPlayer) { PlayerView() }
+        .sheet(isPresented: Binding(get: { search.isPresented }, set: { search.isPresented = $0 })) { SearchView() }
+        .onChange(of: search.isPresented) { _, isPresented in
+            // Siri can ask for a search while another sheet is up; only one can show at a time.
+            if isPresented {
+                showingAddBook = false
+                showingPlayer = false
+            }
+        }
     }
 
     private var skipSettingsMenu: some View {
