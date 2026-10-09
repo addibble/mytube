@@ -33,6 +33,19 @@ final class Library {
         save()
     }
 
+    /// The one-part book for a search result. Reuses the book made the last time the result was
+    /// picked, so its bookmark is kept.
+    func book(for result: SearchResult) -> Audiobook {
+        if let existing = books.first(where: { $0.parts.map(\.videoID) == [result.videoID] }) { return existing }
+        let book = Audiobook(
+            title: result.title,
+            author: result.channel,
+            parts: [Part(videoID: result.videoID, title: result.title)]
+        )
+        add(book)
+        return book
+    }
+
     func remove(_ id: UUID) {
         books.removeAll { $0.id == id }
         save()

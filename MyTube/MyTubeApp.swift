@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct MyTubeApp: App {
+    @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
+
     var body: some Scene {
         WindowGroup {
             LibraryView()

@@ -24,6 +24,17 @@ targets:
         UILaunchScreen: {}
         UIBackgroundModes:
           - audio
+        NSSiriUsageDescription: Lets you ask Siri to play or search for audiobooks in MyTube.
+        INIntentsSupported:
+          - INPlayMediaIntent
+          - INSearchForMediaIntent
+        INSupportedMediaCategories:
+          - INMediaCategoryAudiobooks
+          - INMediaCategoryGeneral
+        # Siri tends to hear "MyTube" as "YouTube"; the spaced spelling gives it a second thing to match.
+        INAlternativeAppNames:
+          - INAlternativeAppName: My Tube
+            INAlternativeAppNamePronunciationHint: my tube
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
@@ -37,6 +48,7 @@ targets:
       path: MyTube/MyTube.entitlements
       properties:
         com.apple.developer.carplay-audio: true
+        com.apple.developer.siri: true
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig

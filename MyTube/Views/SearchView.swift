@@ -31,7 +31,7 @@ struct SearchView: View {
                         ContentUnavailableView(
                             "Search YouTube",
                             systemImage: "magnifyingglass",
-                            description: Text("Or ask Siri: “Search MyTube for…”")
+                            description: Text("Or ask Siri: “Search for … on MyTube”")
                         )
                     } else {
                         ContentUnavailableView.search(text: search.query)
@@ -55,15 +55,7 @@ struct SearchView: View {
     }
 
     private func play(_ result: SearchResult) {
-        // Reuse the book made the last time this result was picked, so its bookmark is kept.
-        let existing = library.books.first { $0.parts.map(\.videoID) == [result.videoID] }
-        let book = existing ?? Audiobook(
-            title: result.title,
-            author: result.channel,
-            parts: [Part(videoID: result.videoID, title: result.title)]
-        )
-        if existing == nil { library.add(book) }
-        player.play(bookID: book.id)
+        player.play(bookID: library.book(for: result).id)
         dismiss()
     }
 }

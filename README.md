@@ -6,7 +6,8 @@ An iOS app for listening to audiobooks that only exist as YouTube videos. A book
 - Skip back/forward by 15 or 30 seconds, playback speed, scrubbing
 - Lock screen / Control Center player
 - CarPlay audio app (needs Apple's `com.apple.developer.carplay-audio` entitlement on your App ID; without it, build with `CODE_SIGN_ENTITLEMENTS=`)
-- YouTube search, in the app or with Siri: "Search MyTube for Dune"
+- Siri: "Play Dune on MyTube" plays a book from your library, or else the top YouTube result; "Search for Dune on MyTube" shows results (needs the Siri capability on your App ID)
+- YouTube search in the app
 
 Audio is streamed with HTTP range requests; nothing is downloaded up front or cached.
 
