@@ -5,6 +5,7 @@ import UIKit
 /// CarPlay: a list of audiobooks that resume on tap, plus the system Now Playing screen.
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
+    private var shownAnswerID = 0
     private let listTemplate = CPListTemplate(title: "Audiobooks", sections: [])
 
     func templateApplicationScene(
@@ -31,6 +32,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         withObservationTracking {
             updateList()
             updateNowPlayingButtons()
+            presentAnswer()
         } onChange: { [weak self] in
             Task { @MainActor in self?.refresh() }
         }
@@ -95,9 +97,31 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             })
         }
 
+        let voiceImage = UIImage(systemName: "speaker.wave.2.bubble") ?? UIImage(systemName: "waveform")
+        if let voiceImage {
+            buttons.append(CPNowPlayingImageButton(image: voiceImage) { _ in ExplainModel.shared.explain(.audio) })
+        }
+        if let textImage = UIImage(systemName: "text.bubble") {
+            buttons.append(CPNowPlayingImageButton(image: textImage) { _ in ExplainModel.shared.explain(.text) })
+        }
+
         let template = CPNowPlayingTemplate.shared
         template.isUpNextButtonEnabled = false
         template.isAlbumArtistButtonEnabled = false
         template.updateNowPlayingButtons(buttons)
+    }
+
+    /// Shows a written explanation as readable paragraphs (CarPlay only allows reading while parked).
+    private func presentAnswer() {
+        guard let interfaceController, case .answer(let text, let id) = ExplainModel.shared.state,
+              id != shownAnswerID else { return }
+        shownAnswerID = id
+        let items = text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(8)
+            .map { CPInformationItem(title: nil, detail: $0) }
+        let template = CPInformationTemplate(title: "Explanation", layout: .leading, items: Array(items), actions: [])
+        interfaceController.pushTemplate(template, animated: true, completion: nil)
     }
 }

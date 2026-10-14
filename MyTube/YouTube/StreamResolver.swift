@@ -1,15 +1,8 @@
-import AVFoundation
 import Foundation
 import YouTubeKit
 
-struct ResolvedStream {
-    enum Source {
-        /// A synthesized HLS media playlist, served to AVPlayer through `PlaylistLoader`.
-        case hls(Data)
-        case direct(URL)
-    }
-
-    let source: Source
+struct ResolvedURL {
+    let url: URL
     /// YouTube stream URLs are signed and stop working after a few hours.
     let expires: Date
 }
@@ -23,7 +16,7 @@ enum StreamError: LocalizedError {
 }
 
 enum StreamResolver {
-    static func resolve(videoID: String) async throws -> ResolvedStream {
+    static func resolve(videoID: String) async throws -> ResolvedURL {
         let streams = try await YouTube(videoID: videoID, methods: [.local, .remote]).streams
         guard let stream = streams.filterAudioOnly().filter({ $0.isNativelyPlayable }).highestAudioBitrateStream() else {
             throw StreamError.noAudioStream
@@ -34,17 +27,15 @@ enum StreamResolver {
             .queryItems?.first { $0.name == "expire" }?.value
         let expires = expireValue.flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0 - 300) }
             ?? Date().addingTimeInterval(4 * 3600)
-
-        // YouTube's audio-only files are fragmented MP4s. AVPlayer can't start or seek a
-        // many-hour one over HTTP in reasonable time, so describe the fragments to it as HLS.
-        if let playlist = try? await hlsPlaylist(for: url) {
-            return ResolvedStream(source: .hls(playlist), expires: expires)
-        }
-        return ResolvedStream(source: .direct(url), expires: expires)
+        return ResolvedURL(url: url, expires: expires)
     }
 
-    /// Builds an HLS byte-range playlist from the file's `sidx` segment index.
-    private static func hlsPlaylist(for url: URL) async throws -> Data {
+    /// Reads the fragment layout from the file's `sidx` segment index.
+    ///
+    /// YouTube's audio-only files are fragmented MP4s. AVPlayer can't start or seek a
+    /// many-hour one over HTTP in reasonable time, so the fragments are described to it
+    /// as HLS (and cached on disk) instead.
+    static func segmentIndex(for url: URL) async throws -> (index: SegmentIndex, initData: Data) {
         var data = try await fetch(url, bytes: 0...131_071)
         var offset = 0
         while offset + 32 <= data.count {
@@ -58,14 +49,15 @@ enum StreamResolver {
                     data.append(try await fetch(url, bytes: data.count...(offset + size - 1)))
                 }
                 guard offset + size <= data.count else { break }
-                return playlist(url: url, data: data, sidxOffset: offset, sidxSize: size)
+                let index = segmentIndex(data: data, sidxOffset: offset, sidxSize: size)
+                return (index, data.subdata(in: data.startIndex..<(data.startIndex + offset)))
             }
             offset += size
         }
         throw StreamError.noAudioStream
     }
 
-    private static func playlist(url: URL, data: Data, sidxOffset: Int, sidxSize: Int) -> Data {
+    private static func segmentIndex(data: Data, sidxOffset: Int, sidxSize: Int) -> SegmentIndex {
         let version = data[sidxOffset + 8]
         let timescale = Double(max(1, data.uint32(at: sidxOffset + 16)))
         var cursor = sidxOffset + 20
@@ -80,59 +72,24 @@ enum StreamResolver {
         let count = data.uint32(at: cursor) & 0xFFFF
         cursor += 4
 
-        let link = url.absoluteString
         var segmentOffset = sidxOffset + sidxSize + firstOffset
-        var longest = 0.0
-        var segments = ""
+        var segments: [SegmentIndex.Segment] = []
         for _ in 0..<count {
             let size = data.uint32(at: cursor) & 0x7FFF_FFFF
             let duration = Double(data.uint32(at: cursor + 4)) / timescale
             cursor += 12
-            longest = max(longest, duration)
-            segments += "#EXTINF:\(String(format: "%.5f", duration)),\n#EXT-X-BYTERANGE:\(size)@\(segmentOffset)\n\(link)\n"
+            segments.append(.init(offset: segmentOffset, size: size, duration: duration))
             segmentOffset += size
         }
-
-        let header = """
-        #EXTM3U
-        #EXT-X-VERSION:7
-        #EXT-X-TARGETDURATION:\(Int(longest.rounded(.up)))
-        #EXT-X-PLAYLIST-TYPE:VOD
-        #EXT-X-MEDIA-SEQUENCE:0
-        #EXT-X-MAP:URI="\(link)",BYTERANGE="\(sidxOffset)@0"
-
-        """
-        return Data((header + segments + "#EXT-X-ENDLIST\n").utf8)
+        return SegmentIndex(initLength: sidxOffset, segments: segments)
     }
 
-    private static func fetch(_ url: URL, bytes: ClosedRange<Int>) async throws -> Data {
+    static func fetch(_ url: URL, bytes: ClosedRange<Int>) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue("bytes=\(bytes.lowerBound)-\(bytes.upperBound)", forHTTPHeaderField: "Range")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 206 else { throw URLError(.badServerResponse) }
         return data
-    }
-}
-
-/// Hands a synthesized playlist to AVPlayer under a custom URL scheme.
-final class PlaylistLoader: NSObject, AVAssetResourceLoaderDelegate {
-    static let url = URL(string: "mytube-hls://playlist/audio.m3u8")!
-
-    private let playlist: Data
-
-    init(playlist: Data) {
-        self.playlist = playlist
-    }
-
-    func resourceLoader(
-        _ resourceLoader: AVAssetResourceLoader,
-        shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
-    ) -> Bool {
-        loadingRequest.contentInformationRequest?.contentType = "public.m3u-playlist"
-        loadingRequest.contentInformationRequest?.contentLength = Int64(playlist.count)
-        loadingRequest.dataRequest?.respond(with: playlist)
-        loadingRequest.finishLoading()
-        return true
     }
 }
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct PlayerView: View {
     @Environment(PlayerEngine.self) private var player
     @Environment(\.dismiss) private var dismiss
+    @Environment(ExplainModel.self) private var explain
 
     /// Position under the finger while the scrubber is being dragged.
     @State private var scrubTime: TimeInterval?
@@ -50,12 +51,48 @@ struct PlayerView: View {
             .labelStyle(.iconOnly)
             .font(.title3)
 
+            explainSection
+
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)
+        .sheet(isPresented: Binding(
+            get: { explain.showsConversation },
+            set: { if !$0 { explain.dismiss() } }
+        )) { ExplainConversationView() }
         .presentationDragIndicator(.hidden)
         .onChange(of: player.bookID) { _, bookID in
             if bookID == nil { dismiss() }
+        }
+    }
+
+    private var explainSection: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Button("Explain by Voice", systemImage: "speaker.wave.2.bubble") { explain.explain(.audio) }
+                Button("Explain in Text", systemImage: "text.bubble") { explain.explain(.text) }
+            }
+            .buttonStyle(.bordered)
+            .labelStyle(.titleAndIcon)
+            .font(.subheadline)
+            .disabled(explain.isBusy || player.currentPart == nil)
+
+            switch explain.state {
+            case .working(let status):
+                HStack {
+                    ProgressView()
+                    Text(status).foregroundStyle(.secondary)
+                    Button("Cancel") { explain.cancel() }
+                }
+                .font(.footnote)
+            case .failed(let message):
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            default:
+                EmptyView()
+            }
         }
     }
 
@@ -211,5 +248,107 @@ struct MiniPlayerView: View {
         if let error = player.errorMessage { return error }
         let part = player.currentPart?.title ?? ""
         return "\(part) · \(player.currentTime.clockString)"
+    }
+}
+
+/// The written explanation and follow-up questions, with a way back into the book.
+struct ExplainConversationView: View {
+    @Environment(ExplainModel.self) private var explain
+    @Environment(PlayerEngine.self) private var player
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(explain.messages.filter { !$0.isContext }) { message in
+                            bubble(message).id(message.id)
+                        }
+                        status
+                            .id("status")
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .onChange(of: explain.messages) { scrollToEnd(proxy) }
+                .onChange(of: explain.state) { scrollToEnd(proxy) }
+            }
+            .navigationTitle("Explanation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Resume", systemImage: "play.fill") {
+                        player.resume()
+                        dismiss()
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) { composer }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func bubble(_ message: ChatMessage) -> some View {
+        switch message.role {
+        case .assistant:
+            Text(message.text)
+                .textSelection(.enabled)
+        case .user:
+            Text(message.text)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch explain.state {
+        case .working(let text):
+            HStack {
+                ProgressView()
+                Text(text).foregroundStyle(.secondary)
+                Button("Stop") { explain.cancel() }
+            }
+            .font(.footnote)
+        case .failed(let message):
+            Text(message).font(.footnote).foregroundStyle(.red)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField("Ask a follow-up", text: $draft, axis: .vertical)
+                .lineLimit(1...4)
+                .focused($focused)
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.send)
+                .onSubmit(send)
+            Button("Send", systemImage: "arrow.up.circle.fill", action: send)
+                .labelStyle(.iconOnly)
+                .font(.title)
+                .disabled(explain.isBusy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding()
+        .background(.bar)
+    }
+
+    private func send() {
+        guard !explain.isBusy else { return }
+        explain.followUp(draft)
+        draft = ""
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        withAnimation { proxy.scrollTo("status", anchor: .bottom) }
     }
 }

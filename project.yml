@@ -22,8 +22,12 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UIBackgroundModes:
           - audio
+        NSMicrophoneUsageDescription: Lets you ask spoken follow-up questions about the passage you just heard.
+        NSSpeechRecognitionUsageDescription: Transcribes the last minute of an audiobook so a model can explain it to you.
         NSSiriUsageDescription: Lets you ask Siri to play or search for audiobooks in MyTube.
         INIntentsSupported:
           - INPlayMediaIntent

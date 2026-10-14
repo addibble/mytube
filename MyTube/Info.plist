@@ -39,8 +39,17 @@
 		<string>INMediaCategoryAudiobooks</string>
 		<string>INMediaCategoryGeneral</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lets you ask spoken follow-up questions about the passage you just heard.</string>
 	<key>NSSiriUsageDescription</key>
 	<string>Lets you ask Siri to play or search for audiobooks in MyTube.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribes the last minute of an audiobook so a model can explain it to you.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

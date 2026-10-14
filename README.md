@@ -8,8 +8,10 @@ An iOS app for listening to audiobooks that only exist as YouTube videos. A book
 - CarPlay audio app (needs Apple's `com.apple.developer.carplay-audio` entitlement on your App ID; without it, build with `CODE_SIGN_ENTITLEMENTS=`)
 - Siri: "Play Dune on MyTube" plays a book from your library, or else the top YouTube result; "Search for Dune on MyTube" shows results (needs the Siri capability on your App ID)
 - YouTube search in the app
+- Offline buffer: the 10 minutes either side of the playhead are kept on disk across launches, so playback starts instantly and rides out dead spots
+- "Explain" (phone and CarPlay): the last minute is transcribed on-device as you listen, then explained by any model on [OpenRouter](https://openrouter.ai) (add your key in Settings). Follow up by typing after a text explanation, or by voice after a spoken one
 
-Audio is streamed with HTTP range requests; nothing is downloaded up front or cached.
+Audio is streamed with HTTP range requests and cached only around the playhead.
 
 ## Building
 

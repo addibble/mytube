@@ -7,6 +7,7 @@ struct LibraryView: View {
 
     @State private var showingAddBook = false
     @State private var showingPlayer = false
+    @State private var showingAISettings = false
 
     var body: some View {
         NavigationStack {
@@ -49,6 +50,7 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showingAddBook) { AddBookView() }
         .sheet(isPresented: $showingPlayer) { PlayerView() }
+        .sheet(isPresented: $showingAISettings) { AISettingsView() }
         .sheet(isPresented: Binding(get: { search.isPresented }, set: { search.isPresented = $0 })) { SearchView() }
         .onChange(of: search.isPresented) { _, isPresented in
             // Siri can ask for a search while another sheet is up; only one can show at a time.
@@ -76,6 +78,9 @@ struct LibraryView: View {
                     ForEach(PlayerEngine.skipChoices, id: \.self) { Text("\($0) seconds").tag($0) }
                 }
                 .pickerStyle(.menu)
+            }
+            Section("Explanations") {
+                Button("OpenRouter Key & Model…", systemImage: "sparkles") { showingAISettings = true }
             }
         }
     }

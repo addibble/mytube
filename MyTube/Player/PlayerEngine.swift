@@ -27,7 +27,12 @@ final class PlayerEngine {
 
     @ObservationIgnored private let player = AVPlayer()
     @ObservationIgnored private let library = Library.shared
-    @ObservationIgnored private var playlistLoader: PlaylistLoader?
+    @ObservationIgnored private var segmentServer: SegmentServer?
+    @ObservationIgnored private var prefetcher: SegmentPrefetcher?
+    @ObservationIgnored private var videoCache: VideoCache?
+    @ObservationIgnored private var transcriber: TranscriptionWorker?
+    @ObservationIgnored private var remote: Task<ResolvedURL, Error>?
+    @ObservationIgnored private var lastPrefetchUpdate = Date.distantPast
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
     @ObservationIgnored private var timeControlObservation: NSKeyValueObservation?
@@ -61,10 +66,15 @@ final class PlayerEngine {
             duration = part.duration
         }
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
+        restorePlaybackSession()
         observePlayer()
         observeSystem()
         configureRemoteCommands()
+    }
+
+    /// Playback audio session; put back after the microphone has been in use.
+    func restorePlaybackSession() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
     }
 
     var currentBook: Audiobook? {
@@ -123,6 +133,8 @@ final class PlayerEngine {
         let target = min(max(0, time), end)
         currentTime = target
         persist()
+        prefetcher?.update(position: target)
+        if isPlaying { transcriber?.update(position: target) }
 
         // Without a loaded stream the new position is simply where the next load starts.
         guard !isLoading, let item = player.currentItem, item.status == .readyToPlay else {
@@ -157,6 +169,29 @@ final class PlayerEngine {
         bookID = nil
         partID = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
+    /// What was said in the last `seconds`, from the running transcript where it exists and
+    /// transcribed now for any stretch it doesn't cover.
+    func recentTranscript(seconds: TimeInterval) async throws -> String {
+        guard let cache = videoCache, let remote else { throw ExplainError.noAudio }
+        let end = currentTime
+        let start = max(0, end - seconds)
+        var words: [TimedWord] = []
+        for chunk in cache.chunk(at: start)...cache.chunk(at: end) {
+            if let transcript = cache.transcript(chunk: chunk) {
+                words += transcript
+                continue
+            }
+            let range = cache.segments(inChunk: chunk)
+            for number in range where cache.segmentData(number) == nil {
+                try await cache.download(number...number, from: try await remote.value.url)
+            }
+            words += try await cache.transcribe(chunk: chunk)
+        }
+        let text = words.filter { $0.start >= start - 1 && $0.start <= end }.map(\.text).joined(separator: " ")
+        guard !text.isEmpty else { throw ExplainError.noSpeech }
+        return text
     }
 
     func setRate(_ newRate: Float) {
@@ -195,11 +230,25 @@ final class PlayerEngine {
         loadArtwork(for: part.videoID)
 
         let videoID = part.videoID
+        let remote = Task { try await StreamResolver.resolve(videoID: videoID) }
+        self.remote = remote
         loadTask = Task { [weak self] in
             do {
-                let stream = try await StreamResolver.resolve(videoID: videoID)
+                // A cache from an earlier run starts playback without waiting on the network.
+                if let cache = VideoCache.open(videoID: videoID) {
+                    try await self?.install(cache: cache, remote: remote)
+                    return
+                }
+                let stream = try await remote.value
                 guard !Task.isCancelled else { return }
-                self?.install(stream)
+                if let (index, initData) = try? await StreamResolver.segmentIndex(for: stream.url),
+                   let cache = VideoCache.create(videoID: videoID, index: index, initData: initData) {
+                    guard !Task.isCancelled else { return }
+                    try await self?.install(cache: cache, remote: remote)
+                } else {
+                    guard !Task.isCancelled else { return }
+                    self?.installDirect(stream)
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 self?.fail(error)
@@ -213,19 +262,39 @@ final class PlayerEngine {
         load(bookID: bookID, part: part, at: currentTime, autoplay: isPlaying)
     }
 
-    private func install(_ stream: ResolvedStream) {
-        let asset: AVURLAsset
-        switch stream.source {
-        case .hls(let playlist):
-            let loader = PlaylistLoader(playlist: playlist)
-            playlistLoader = loader
-            asset = AVURLAsset(url: PlaylistLoader.url)
-            asset.resourceLoader.setDelegate(loader, queue: .main)
-        case .direct(let url):
-            asset = AVURLAsset(url: url)
+    private func install(cache: VideoCache, remote: Task<ResolvedURL, Error>) async throws {
+        let server = try SegmentServer(cache: cache, remote: remote)
+        let playlistURL = try await server.start()
+        guard !Task.isCancelled else {
+            server.stop()
+            return
         }
-        streamExpiry = stream.expires
+        segmentServer = server
+        videoCache = cache
+        let asset = AVURLAsset(url: playlistURL)
 
+        let prefetcher = SegmentPrefetcher(cache: cache, remote: remote, position: currentTime)
+        self.prefetcher = prefetcher
+        prefetcher.update(position: currentTime)
+        transcriber = TranscriptionWorker(cache: cache, position: currentTime)
+        if isPlaying { transcriber?.update(position: currentTime) }
+
+        // The stream URL is only known once it resolves; a cached start doesn't wait for it.
+        streamExpiry = .distantFuture
+        Task { [weak self] in
+            guard let stream = try? await remote.value else { return }
+            guard let self, self.segmentServer === server else { return }
+            self.streamExpiry = stream.expires
+        }
+        install(asset)
+    }
+
+    private func installDirect(_ stream: ResolvedURL) {
+        streamExpiry = stream.expires
+        install(AVURLAsset(url: stream.url))
+    }
+
+    private func install(_ asset: AVURLAsset) {
         let item = AVPlayerItem(asset: asset)
         item.audioTimePitchAlgorithm = .timeDomain
         statusObservation = item.observe(\.status) { [weak self] item, _ in
@@ -256,6 +325,9 @@ final class PlayerEngine {
                 }
             }
         case .failed:
+            #if DEBUG
+            print("ITEM FAILED:", item.error as Any, item.errorLog()?.events.map { "\($0.errorStatusCode) \($0.errorComment ?? "") \($0.uri ?? "")" } ?? [])
+            #endif
             recover(from: item.error)
         default:
             break
@@ -265,7 +337,15 @@ final class PlayerEngine {
     private func removeItem() {
         statusObservation = nil
         player.replaceCurrentItem(with: nil)
-        playlistLoader = nil
+        remote?.cancel()
+        remote = nil
+        prefetcher?.cancel()
+        prefetcher = nil
+        transcriber?.cancel()
+        transcriber = nil
+        segmentServer?.stop()
+        segmentServer = nil
+        videoCache = nil
     }
 
     /// Stream URLs expire and connections drop; retry with a fresh stream before giving up.
@@ -307,6 +387,11 @@ final class PlayerEngine {
         currentTime = time
         guard isPlaying else { return }
         if Date().timeIntervalSince(lastPersist) >= 5 { persist() }
+        if Date().timeIntervalSince(lastPrefetchUpdate) >= 10 {
+            lastPrefetchUpdate = Date()
+            prefetcher?.update(position: time)
+            transcriber?.update(position: time)
+        }
         if Date() >= streamExpiry { reload() }
     }
 

@@ -10,6 +10,8 @@ struct MyTubeApp: App {
                 .environment(Library.shared)
                 .environment(PlayerEngine.shared)
                 .environment(SearchModel.shared)
+                .environment(ExplainModel.shared)
+                .environment(LLMSettings.shared)
                 #if DEBUG
                 .task {
                     // `-autoplay` starts the first book at launch, for testing without tapping.
